@@ -26,6 +26,29 @@ for await (const change of db.watch({ interval: 2000 })) {
 }
 ```
 
+## Reactive cache
+
+`createCache(db)` keeps one in-memory snapshot of a sheet, polls + diffs, and dispatches
+granular events — one poller feeds many listeners (cheaper than each view re-reading). Works
+over a public sheet with no auth:
+
+```js
+import { connect, createCache } from "gsab";
+
+const db = connect("https://docs.google.com/spreadsheets/d/<ID>/edit").sheet();
+const cache = createCache(db, { key: "id", interval: 2000 });
+
+cache.on("insert", (row) => console.log("added", row));
+cache.on("update", (row, prev) => console.log("changed", prev, "→", row));
+cache.on("delete", (row) => console.log("removed", row));
+
+await cache.start();     // resolves once the initial snapshot is loaded ("ready")
+cache.all();             // current rows;  cache.get(1);  cache.size
+cache.stop();            // stop polling (the snapshot stays readable)
+```
+
+Experimental — polling (~1–2s), not push (same envelope as `watch()`).
+
 ## Authenticated CRUD (Node)
 
 Writes (and reads of private sheets) need a Google sign-in. In Node, `loopbackAuth()` reuses
@@ -69,9 +92,9 @@ directly), a table stays live-collaborative.
 
 ## Roadmap
 
-- **Now:** `read` / `query` / `watch` over a public sheet (no auth) **+ authenticated CRUD in
+- **Now:** `read` / `query` / `watch` over a public sheet (no auth) · **authenticated CRUD in
   Node** (`createSheet` / `insert` / `bulkInsert` / `update` / `delete` / `upsert` / `share`)
-  via loopback OAuth.
+  via loopback OAuth · a **reactive cache** (`createCache` — snapshot + delta dispatch).
 - **Next:** browser auth via Google Identity Services (a Web OAuth client), then a hosted
   sign-in page for near-zero-setup browser auth.
-- **Later:** a reactive cache (one snapshot + delta dispatch) and React bindings (`useSheet`).
+- **Later:** React bindings (`useSheet`).

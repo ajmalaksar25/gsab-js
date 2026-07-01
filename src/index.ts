@@ -11,6 +11,8 @@ export { SheetConnection, parseSheetId, PUBLIC } from "./connection";
 export type { ConnectOptions, Credentials } from "./connection";
 export { SheetManager } from "./manager";
 export type { ChangeSet, WatchOptions, Row, Filters, ShareRole } from "./manager";
+export { SheetCache, createCache } from "./cache";
+export type { CacheOptions, CacheEvent } from "./cache";
 export { Schema, FieldType, normalizeSchema } from "./schema";
 export type { FieldDef, SchemaDef, FieldTypeName } from "./schema";
 export {

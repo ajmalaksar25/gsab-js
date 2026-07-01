@@ -38,7 +38,8 @@
     "check": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
     "verify:read": "node examples/verify-read.mjs",
-    "verify:crud": "node examples/verify-crud.mjs"
+    "verify:crud": "node examples/verify-crud.mjs",
+    "verify:cache": "node examples/verify-cache.mjs"
   },
   "keywords": [
     "google-sheets",
