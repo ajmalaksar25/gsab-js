@@ -1,0 +1,13 @@
+node_modules/
+dist/
+*.log
+.env
+.env.*
+# secrets / tokens — never commit
+token.json
+client_secret*.json
+*service-account*.json
+# lean-ctx artifacts
+.lean-ctx/
+.ctx/
+*.ctx
