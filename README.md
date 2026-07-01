@@ -61,6 +61,12 @@ the Node auth dependencies. Constraints match the Python library: no transaction
 `unique`/`primaryKey` are enforced read-check-write (concurrent inserts of the same new key
 can still race).
 
+**Concurrent editing:** `update()` writes only the **changed cells**, so two clients editing
+*different fields of the same row* at the same time don't clobber each other — only a true
+same-*cell* edit is last-write-wins (Sheets has no conditional writes). Combined with
+`watch()` (which sees writes from your app, other clients, and people editing the Sheet
+directly), a table stays live-collaborative.
+
 ## Roadmap
 
 - **Now:** `read` / `query` / `watch` over a public sheet (no auth) **+ authenticated CRUD in

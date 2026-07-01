@@ -118,15 +118,29 @@ test("bulkInsert appends many rows and returns the count", async () => {
   }
 });
 
-test("update rewrites matching rows and returns the count", async () => {
+test("update writes ONLY the changed cell (targeted, not the whole row)", async () => {
   const db = boundDb();
   const { calls, restore } = installFetch();
   try {
     const n = await db.update({ id: 1 }, { plan: "team" });
     assert.equal(n, 1);
     const batch = calls.find((c) => c.url.endsWith("/values:batchUpdate"));
-    assert.equal(batch!.body.data[0].range, "'users'!A2"); // row 2 (row 1 is the header)
-    assert.deepEqual(batch!.body.data[0].values, [[1, "Ada", "team"]]); // merged, coerced
+    assert.equal(batch!.body.data.length, 1); // one cell, not the 3-column row
+    assert.equal(batch!.body.data[0].range, "'users'!C2"); // 'plan' is column C, data row 2
+    assert.deepEqual(batch!.body.data[0].values, [["team"]]);
+  } finally {
+    restore();
+  }
+});
+
+test("update writes one cell per changed field, leaving others untouched", async () => {
+  const db = boundDb();
+  const { calls, restore } = installFetch();
+  try {
+    await db.update({ id: 1 }, { name: "Ada2", plan: "team" });
+    const batch = calls.find((c) => c.url.endsWith("/values:batchUpdate"));
+    const ranges = batch!.body.data.map((d: any) => d.range).sort();
+    assert.deepEqual(ranges, ["'users'!B2", "'users'!C2"]); // name=B, plan=C; id (A) untouched
   } finally {
     restore();
   }

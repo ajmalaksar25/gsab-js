@@ -1,11 +1,29 @@
-import { coerceRows, coerceValue, fromCell, recordToRow, rowToRecord, valuesEqual } from "./coerce";
+import {
+  coerceRows,
+  coerceValue,
+  fromCell,
+  recordToRow,
+  rowToRecord,
+  toCell,
+  valuesEqual,
+} from "./coerce";
 import { DuplicateKeyError, ValidationError } from "./errors";
 import { runGvizQuery } from "./gviz";
 import { driveApi, sheetsApi } from "./rest";
 import { sleep } from "./util";
 import { applyDefaults, validateRecord } from "./validate";
+import { FieldType } from "./schema";
 import type { SheetConnection } from "./connection";
 import type { Schema } from "./schema";
+
+/** 0-based column index -> A1 column letters (0 -> "A", 25 -> "Z", 26 -> "AA"). */
+function colLetter(index: number): string {
+  let s = "";
+  for (let n = index; n >= 0; n = Math.floor(n / 26) - 1) {
+    s = String.fromCharCode(65 + (n % 26)) + s;
+  }
+  return s;
+}
 
 export type Row = Record<string, unknown>;
 export type Filters = Record<string, unknown>;
@@ -253,6 +271,23 @@ export class SheetManager {
     });
   }
 
+  /** One targeted cell-write per changed field on a row (fields not in the header are skipped).
+   *  Writing only the changed cells — not the whole row — lets two clients edit different fields
+   *  of the same row concurrently without clobbering each other. */
+  private _cellWrites(
+    headers: string[],
+    rowIndex: number,
+    fields: Row,
+  ): { range: string; values: (string | number | boolean)[][] }[] {
+    return Object.keys(fields)
+      .map((f) => ({ f, idx: headers.indexOf(f) }))
+      .filter((c) => c.idx >= 0)
+      .map((c) => ({
+        range: `${this._qtab()}!${colLetter(c.idx)}${rowIndex}`,
+        values: [[toCell(fields[c.f], this.schema?.fields[c.f]?.type ?? FieldType.STRING)]],
+      }));
+  }
+
   // --- writes (authenticated) -----------------------------------------------
 
   /** Create the spreadsheet (tab named after the schema) and write its header row. Returns the id. */
@@ -309,13 +344,10 @@ export class SheetManager {
     const matches = grid.rows.filter((x) => matchesFilters(x.record, filters, this.schema));
     if (!matches.length) return 0;
     if (this.schema) validateRecord(this.schema, updates, true);
-    await this._batchWrite(
-      token,
-      matches.map((m) => ({
-        range: `${this._qtab()}!A${m.rowIndex}`,
-        values: [recordToRow({ ...m.record, ...updates }, grid.headers, this.schema)],
-      })),
-    );
+    // Write only the changed cells (not the whole row) so concurrent edits to different
+    // fields of the same row don't clobber each other.
+    const data = matches.flatMap((m) => this._cellWrites(grid.headers, m.rowIndex, updates));
+    if (data.length) await this._batchWrite(token, data);
     return matches.length;
   }
 
@@ -357,12 +389,9 @@ export class SheetManager {
     const match = grid.rows.find((x) => valuesEqual(x.record[key], target));
     if (match) {
       if (this.schema) validateRecord(this.schema, data, true);
-      await this._batchWrite(token, [
-        {
-          range: `${this._qtab()}!A${match.rowIndex}`,
-          values: [recordToRow({ ...match.record, ...data }, grid.headers, this.schema)],
-        },
-      ]);
+      // Targeted cell-writes (only the supplied fields), same as update().
+      const writes = this._cellWrites(grid.headers, match.rowIndex, data);
+      if (writes.length) await this._batchWrite(token, writes);
       return "updated";
     }
     const prepared = this.schema ? applyDefaults(this.schema, data) : data;
