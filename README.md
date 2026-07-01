@@ -5,7 +5,7 @@ queries, and realtime `watch()`, in the **browser** and **Node**. Companion to t
 library ([`gsab` on PyPI](https://pypi.org/project/gsab/)).
 
 - Docs: https://gsab.ajmalaksar.com
-- Status: **pre-release** (`0.0.0`) — the no-auth read tier works today; authenticated CRUD is in progress.
+- Status: **early** (`0.1.0`) — no-auth public reads **and authenticated CRUD in Node** work today; browser (GIS) auth is next.
 
 ## No-auth public read (zero setup)
 
@@ -26,11 +26,46 @@ for await (const change of db.watch({ interval: 2000 })) {
 }
 ```
 
+## Authenticated CRUD (Node)
+
+Writes (and reads of private sheets) need a Google sign-in. In Node, `loopbackAuth()` reuses
+the same OAuth client the [Python `gsab` CLI](https://pypi.org/project/gsab/) installed — sign
+in once in the browser; the token is cached after:
+
+```js
+import { connect } from "gsab";
+import { loopbackAuth } from "gsab/node";
+
+const schema = {
+  name: "users",
+  fields: {
+    id: { type: "integer", primaryKey: true },
+    name: { type: "string", required: true },
+    plan: { type: "string", default: "free" },
+  },
+};
+
+const db = connect({ auth: await loopbackAuth() }).sheet(schema);
+
+const id = await db.createSheet("My App DB");    // creates the spreadsheet, returns its id
+await db.insert({ id: 1, name: "Ada", plan: "pro" });
+await db.bulkInsert([{ id: 2, name: "Linus" }]);
+await db.upsert({ id: 1, plan: "team" });        // insert-or-update on the primary key
+await db.update({ id: 2 }, { plan: "team" });
+await db.delete({ id: 2 });
+const url = await db.share("reader");            // public link (reader | commenter | writer)
+```
+
+`gsab/node` is a **separate entry point**, so importing `gsab` in the browser never pulls in
+the Node auth dependencies. Constraints match the Python library: no transactions, and
+`unique`/`primaryKey` are enforced read-check-write (concurrent inserts of the same new key
+can still race).
+
 ## Roadmap
 
-- **Now:** `read` / `query` / `watch` over a public sheet (no auth).
-- **Next:** authenticated CRUD — `insert` / `update` / `delete` / `upsert` / `share`.
-  Node uses the same loopback OAuth as the Python CLI; the browser uses Google Identity
-  Services (a Web OAuth client).
-- **Later:** a reactive cache (one snapshot + delta dispatch), React bindings (`useSheet`),
-  and a hosted sign-in page for near-zero-setup browser auth.
+- **Now:** `read` / `query` / `watch` over a public sheet (no auth) **+ authenticated CRUD in
+  Node** (`createSheet` / `insert` / `bulkInsert` / `update` / `delete` / `upsert` / `share`)
+  via loopback OAuth.
+- **Next:** browser auth via Google Identity Services (a Web OAuth client), then a hosted
+  sign-in page for near-zero-setup browser auth.
+- **Later:** a reactive cache (one snapshot + delta dispatch) and React bindings (`useSheet`).

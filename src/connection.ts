@@ -1,4 +1,3 @@
-import { ValidationError } from "./errors";
 import { SheetManager } from "./manager";
 import { normalizeSchema } from "./schema";
 import type { Schema, SchemaDef } from "./schema";
@@ -34,8 +33,9 @@ export class SheetConnection {
       return;
     }
     const raw = opts.spreadsheetId ?? opts.url;
-    if (!raw) throw new ValidationError("connect() needs a spreadsheetId or url.");
-    this.spreadsheetId = parseSheetId(raw);
+    // No id/url is allowed when authenticated: createSheet() makes a new spreadsheet and
+    // binds it. Read/query/etc. throw until then (see SheetManager).
+    this.spreadsheetId = raw ? parseSheetId(raw) : "";
     this.auth = !opts.auth || opts.auth === "public" ? PUBLIC : opts.auth;
   }
 

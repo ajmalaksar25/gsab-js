@@ -1,6 +1,6 @@
 {
   "name": "gsab",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Google Sheets as a Backend — JavaScript/TypeScript client (CRUD, server-side query, realtime watch) for the browser and Node.",
   "type": "module",
   "sideEffects": false,
@@ -15,6 +15,16 @@
         "default": "./dist/index.cjs"
       }
     },
+    "./node": {
+      "import": {
+        "types": "./dist/node.d.ts",
+        "default": "./dist/node.js"
+      },
+      "require": {
+        "types": "./dist/node.d.cts",
+        "default": "./dist/node.cjs"
+      }
+    },
     "./package.json": "./package.json"
   },
   "main": "./dist/index.cjs",
@@ -26,7 +36,9 @@
   "scripts": {
     "build": "tsdown",
     "check": "tsc --noEmit",
-    "verify:read": "node examples/verify-read.mjs"
+    "test": "node --import tsx --test test/*.test.ts",
+    "verify:read": "node examples/verify-read.mjs",
+    "verify:crud": "node examples/verify-crud.mjs"
   },
   "keywords": [
     "google-sheets",
@@ -43,7 +55,13 @@
     "node": ">=18"
   },
   "devDependencies": {
+    "@types/node": "^26.1.0",
     "tsdown": "^0.22.3",
+    "tsx": "^4.22.4",
     "typescript": "^6.0.3"
+  },
+  "dependencies": {
+    "@google-cloud/local-auth": "^3.0.1",
+    "google-auth-library": "^10.9.0"
   }
 }
