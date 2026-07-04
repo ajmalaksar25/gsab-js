@@ -10,7 +10,8 @@
     "verbatimModuleSyntax": true,
     "noEmit": true,
     "isolatedModules": true,
-    "esModuleInterop": true
+    "esModuleInterop": true,
+    "allowImportingTsExtensions": true
   },
-  "include": ["src", "examples"]
+  "include": ["src", "examples", "test"]
 }

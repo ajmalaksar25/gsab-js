@@ -41,13 +41,52 @@ const cache = createCache(db, { key: "id", interval: 2000 });
 cache.on("insert", (row) => console.log("added", row));
 cache.on("update", (row, prev) => console.log("changed", prev, "→", row));
 cache.on("delete", (row) => console.log("removed", row));
+cache.on("sync",   (rows) => {});  // after EVERY successful poll, changed or not
+cache.on("error",  (err) => {});   // a poll failed (polling continues)
 
 await cache.start();     // resolves once the initial snapshot is loaded ("ready")
-cache.all();             // current rows;  cache.get(1);  cache.size
+cache.all();             // current rows;  cache.get(1);  cache.size;  cache.running
 cache.stop();            // stop polling (the snapshot stays readable)
 ```
 
 Experimental — polling (~1–2s), not push (same envelope as `watch()`).
+
+## React bindings (`useSheet`)
+
+`gsab/react` turns a sheet into live component state — rows, loading, and error, re-rendered
+on every change. No providers, no config:
+
+```jsx
+import { connect } from "gsab";
+import { useSheet } from "gsab/react";
+
+const db = connect("https://docs.google.com/spreadsheets/d/<ID>/edit").sheet();
+
+function Users() {
+  const { rows, loading, error } = useSheet(db, { key: "id" });
+  if (loading) return <p>Loading…</p>;
+  if (error) return <p>Sheet unreachable — showing the last known rows.</p>;
+  return <ul>{rows.map((r) => <li key={String(r.id)}>{String(r.name)}</li>)}</ul>;
+}
+```
+
+(In TypeScript, type the rows with `useSheet<User>(db, ...)` — rows are `Record<string,
+unknown>` otherwise.)
+
+Passing a manager gives the component its own poller (started on mount, stopped on unmount).
+To share **one** poller across many components, create the cache yourself and pass it in —
+a never-started cache is started for you (and left running); one you stopped stays stopped,
+and the hook never stops a cache it didn't create:
+
+```js
+const cache = createCache(db, { key: "id" });  // app level (or via context)
+const { rows } = useSheet(cache);              // any number of components
+```
+
+`useSheet` also returns `refresh()` (re-read now) and the underlying `cache` (escape hatch
+for `get()` / `on()`). Works with any auth tier — public read-only sheets or an authed
+manager. React ≥18 is an optional peer dependency; the `gsab` and `gsab/node` entry points
+never load it. Experimental, like the cache it sits on.
 
 ## Authenticated CRUD (Node)
 
@@ -94,7 +133,7 @@ directly), a table stays live-collaborative.
 
 - **Now:** `read` / `query` / `watch` over a public sheet (no auth) · **authenticated CRUD in
   Node** (`createSheet` / `insert` / `bulkInsert` / `update` / `delete` / `upsert` / `share`)
-  via loopback OAuth · a **reactive cache** (`createCache` — snapshot + delta dispatch).
+  via loopback OAuth · a **reactive cache** (`createCache` — snapshot + delta dispatch) ·
+  **React bindings** (`useSheet` over the cache).
 - **Next:** browser auth via Google Identity Services (a Web OAuth client), then a hosted
   sign-in page for near-zero-setup browser auth.
-- **Later:** React bindings (`useSheet`).

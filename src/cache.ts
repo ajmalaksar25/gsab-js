@@ -22,7 +22,7 @@ export interface CacheOptions {
   key?: string;
 }
 
-export type CacheEvent = "insert" | "update" | "delete" | "change" | "ready" | "error";
+export type CacheEvent = "insert" | "update" | "delete" | "change" | "ready" | "sync" | "error";
 
 type Handler = (...args: any[]) => void;
 
@@ -35,6 +35,8 @@ export class SheetCache {
   private listeners: Map<CacheEvent, Handler[]> = new Map();
   private controller?: AbortController;
   private task?: Promise<void>;
+  private inflight?: Promise<void>;
+  private _loaded = false;
 
   constructor(manager: SheetManager, opts: CacheOptions = {}) {
     this.manager = manager;
@@ -49,11 +51,12 @@ export class SheetCache {
 
   /** Subscribe to an event. Returns an unsubscribe function.
    *  `insert`/`delete` → (row); `update` → (row, prev); `change` → (ChangeSet);
-   *  `ready` → (rows); `error` → (err). */
+   *  `ready` → (rows); `sync` → (rows) after every successful poll, changed or not;
+   *  `error` → (err). */
   on(event: "insert" | "delete", handler: (row: Row) => void): () => void;
   on(event: "update", handler: (row: Row, prev: Row | undefined) => void): () => void;
   on(event: "change", handler: (change: ChangeSet) => void): () => void;
-  on(event: "ready", handler: (rows: Row[]) => void): () => void;
+  on(event: "ready" | "sync", handler: (rows: Row[]) => void): () => void;
   on(event: "error", handler: (err: unknown) => void): () => void;
   on(event: CacheEvent, handler: Handler): () => void {
     const list = this.listeners.get(event) ?? [];
@@ -86,9 +89,25 @@ export class SheetCache {
     return this.snapshot.size;
   }
 
+  /** True while polling (between `start()` and `stop()`). */
+  get running(): boolean {
+    return this.controller !== undefined;
+  }
+
+  /** True once a snapshot has loaded at least once (it survives `stop()`). */
+  get loaded(): boolean {
+    return this._loaded;
+  }
+
   /** Read once and diff against the current snapshot, emitting events. `start()` calls this
-   *  on the interval; call it yourself to force an immediate refresh. */
-  async refresh(): Promise<void> {
+   *  on the interval; call it yourself to force an immediate refresh. Overlapping calls
+   *  share one read — two in-flight reads could otherwise resolve out of order and roll
+   *  the snapshot back. */
+  refresh(): Promise<void> {
+    return (this.inflight ??= this._refresh().finally(() => (this.inflight = undefined)));
+  }
+
+  private async _refresh(): Promise<void> {
     const rows = await this.manager.read(this.filters);
     const next = new Map<unknown, Row>(rows.map((r) => [this._k(r), r]));
     const added: Row[] = [];
@@ -111,20 +130,34 @@ export class SheetCache {
       }
     }
     this.snapshot = next;
+    this._loaded = true;
     if (added.length || updated.length || removed.length) {
       this._emit("change", { added, updated, removed });
     }
+    this._emit("sync", this.all());
   }
 
   /** Load the initial snapshot (emitting `ready`), then poll for changes in the background.
    *  Resolves once the initial snapshot is loaded. Idempotent. */
   async start(): Promise<this> {
     if (this.controller) return this;
-    this.controller = new AbortController();
-    const rows = await this.manager.read(this.filters);
+    const controller = new AbortController();
+    this.controller = controller;
+    let rows: Row[];
+    try {
+      rows = await this.manager.read(this.filters);
+    } catch (e) {
+      // Don't leave a half-started cache — a later start() must retry.
+      if (this.controller === controller) this.stop();
+      throw e;
+    }
+    // stop() (or stop()+start()) ran while the read was in flight: this call was superseded —
+    // don't touch the snapshot or spawn a second poll loop.
+    if (controller.signal.aborted) return this;
     this.snapshot = new Map(rows.map((r) => [this._k(r), r]));
+    this._loaded = true;
     this._emit("ready", this.all());
-    this.task = this._loop(this.controller.signal);
+    this.task = this._loop(controller.signal);
     return this;
   }
 
