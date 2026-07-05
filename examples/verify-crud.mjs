@@ -8,8 +8,8 @@
  *  inspect or delete. Requires the gsab Python CLI to have been set up once (`gsab auth login`),
  *  or pass a clientSecretPath to loopbackAuth().
  */
-import { connect } from "gsab";
-import { loopbackAuth } from "gsab/node";
+import { connect } from "gsab-js";
+import { loopbackAuth } from "gsab-js/node";
 
 const schema = {
   name: "users",

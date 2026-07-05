@@ -1,7 +1,7 @@
 /** gsab — Google Sheets as a Backend (JavaScript / TypeScript client).
  *
  *  No-auth public read tier (browser + Node):
- *      import { connect } from "gsab";
+ *      import { connect } from "gsab-js";
  *      const db = connect("https://docs.google.com/spreadsheets/d/<ID>/edit").sheet();
  *      const rows = await db.read({ plan: "pro" });
  *      const top  = await db.query("SELECT A, D ORDER BY D DESC LIMIT 10");

@@ -5,7 +5,7 @@
  *  Loads an initial snapshot (the "ready" event), prints it, and wires the granular
  *  insert/update/delete listeners. The sample sheet is static, so no deltas fire — edit a
  *  copy of your own and watch them stream in. */
-import { connect, createCache } from "gsab";
+import { connect, createCache } from "gsab-js";
 
 // Google's public "Class Data" sample sheet.
 const URL =

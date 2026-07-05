@@ -64,7 +64,7 @@ function requireToken(token: string | null): string {
   if (!token) {
     throw new AuthError(
       "This operation needs authentication. Provide credentials via connect({ url, auth }) — " +
-        'Node: `import { loopbackAuth } from "gsab/node"`; browser: a Google Identity Services token.',
+        'Node: `import { loopbackAuth } from "gsab-js/node"`; browser: a Google Identity Services token.',
     );
   }
   return token;

@@ -13,7 +13,7 @@ Reading a **public** ("anyone with the link") sheet needs no OAuth and no API ke
 in a plain browser page or in Node:
 
 ```js
-import { connect } from "gsab";
+import { connect } from "gsab-js";
 
 const db = connect("https://docs.google.com/spreadsheets/d/<ID>/edit").sheet();
 
@@ -33,7 +33,7 @@ granular events — one poller feeds many listeners (cheaper than each view re-r
 over a public sheet with no auth:
 
 ```js
-import { connect, createCache } from "gsab";
+import { connect, createCache } from "gsab-js";
 
 const db = connect("https://docs.google.com/spreadsheets/d/<ID>/edit").sheet();
 const cache = createCache(db, { key: "id", interval: 2000 });
@@ -53,12 +53,12 @@ Experimental — polling (~1–2s), not push (same envelope as `watch()`).
 
 ## React bindings (`useSheet`)
 
-`gsab/react` turns a sheet into live component state — rows, loading, and error, re-rendered
+`gsab-js/react` turns a sheet into live component state — rows, loading, and error, re-rendered
 on every change. No providers, no config:
 
 ```jsx
-import { connect } from "gsab";
-import { useSheet } from "gsab/react";
+import { connect } from "gsab-js";
+import { useSheet } from "gsab-js/react";
 
 const db = connect("https://docs.google.com/spreadsheets/d/<ID>/edit").sheet();
 
@@ -85,7 +85,7 @@ const { rows } = useSheet(cache);              // any number of components
 
 `useSheet` also returns `refresh()` (re-read now) and the underlying `cache` (escape hatch
 for `get()` / `on()`). Works with any auth tier — public read-only sheets or an authed
-manager. React ≥18 is an optional peer dependency; the `gsab` and `gsab/node` entry points
+manager. React ≥18 is an optional peer dependency; the `gsab` and `gsab-js/node` entry points
 never load it. Experimental, like the cache it sits on.
 
 ## Authenticated CRUD (Node)
@@ -95,8 +95,8 @@ the same OAuth client the [Python `gsab` CLI](https://pypi.org/project/gsab/) in
 in once in the browser; the token is cached after:
 
 ```js
-import { connect } from "gsab";
-import { loopbackAuth } from "gsab/node";
+import { connect } from "gsab-js";
+import { loopbackAuth } from "gsab-js/node";
 
 const schema = {
   name: "users",
@@ -118,7 +118,7 @@ await db.delete({ id: 2 });
 const url = await db.share("reader");            // public link (reader | commenter | writer)
 ```
 
-`gsab/node` is a **separate entry point**, so importing `gsab` in the browser never pulls in
+`gsab-js/node` is a **separate entry point**, so importing `gsab` in the browser never pulls in
 the Node auth dependencies. Constraints match the Python library: no transactions, and
 `unique`/`primaryKey` are enforced read-check-write (concurrent inserts of the same new key
 can still race).
@@ -130,15 +130,15 @@ Print your credentials **once, on your own machine** (this reuses — or trigger
 loopback sign-in):
 
 ```sh
-node --input-type=module -e "console.log(await (await import('gsab/node')).deployEnv())"
+node --input-type=module -e "console.log(await (await import('gsab-js/node')).deployEnv())"
 # → { GSAB_CLIENT_ID, GSAB_CLIENT_SECRET, GSAB_REFRESH_TOKEN }   (treat as secrets)
 ```
 
 Set those three as env vars on your host, and the server code is one line different:
 
 ```js
-import { connect } from "gsab";
-import { refreshTokenAuth } from "gsab/node";
+import { connect } from "gsab-js";
+import { refreshTokenAuth } from "gsab-js/node";
 
 const db = connect({ spreadsheetId, auth: refreshTokenAuth() }).sheet(schema);
 ```

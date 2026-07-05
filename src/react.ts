@@ -1,7 +1,7 @@
 /** React bindings — a live sheet as a hook, built on `createCache()`.
  *
- *      import { connect } from "gsab";
- *      import { useSheet } from "gsab/react";
+ *      import { connect } from "gsab-js";
+ *      import { useSheet } from "gsab-js/react";
  *
  *      const db = connect(SHEET_URL).sheet();          // module scope
  *      function Users() {

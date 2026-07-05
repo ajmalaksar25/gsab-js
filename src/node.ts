@@ -1,18 +1,18 @@
 /** Node authentication — loopback OAuth via @google-cloud/local-auth (parity with the Python
- *  `gsab auth login`). Node-only; exported as the `gsab/node` subpath so the browser bundle
+ *  `gsab auth login`). Node-only; exported as the `gsab-js/node` subpath so the browser bundle
  *  never pulls in google-auth-library.
  *
  *  On your machine (opens a browser once, then reuses the cached token):
  *
- *      import { connect } from "gsab";
- *      import { loopbackAuth } from "gsab/node";
+ *      import { connect } from "gsab-js";
+ *      import { loopbackAuth } from "gsab-js/node";
  *      const db = connect({ url, auth: await loopbackAuth() }).sheet(schema);
  *      await db.insert({ id: 1, name: "Ada" });
  *
  *  On a server (Vercel / serverless / CI — no browser, no filesystem cache): print your
  *  credentials once with `deployEnv()`, set them as env vars, and use `refreshTokenAuth()`:
  *
- *      node --input-type=module -e "console.log(await (await import('gsab/node')).deployEnv())"
+ *      node --input-type=module -e "console.log(await (await import('gsab-js/node')).deployEnv())"
  *      // → { GSAB_CLIENT_ID, GSAB_CLIENT_SECRET, GSAB_REFRESH_TOKEN }
  *
  *      const db = connect({ spreadsheetId, auth: refreshTokenAuth() }).sheet(schema); */
