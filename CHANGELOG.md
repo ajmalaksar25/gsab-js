@@ -1,7 +1,16 @@
 # Changelog
 
-## 0.1.1 — 2026-07-05
+## 0.2.0 — 2026-07-05
 
+Deploy setup is now one command and one variable.
+
+- **`npx gsab-js env`** — sign in once on your machine, get a single `GSAB_CREDENTIALS`
+  value to set on your host (`--split` for the three-variable form). **`npx gsab-js doctor`**
+  verifies a deploy environment end-to-end (presence + a real token refresh).
+- `refreshTokenAuth()` accepts the packed `GSAB_CREDENTIALS` (env or `{ credentials }`)
+  as well as the trio; partial configuration errors now name exactly the missing variable.
+- `deployEnv()` returns `{ GSAB_CREDENTIALS }` by default (pass `{ split: true }` for the
+  previous three-key shape).
 - **Agent skill bundled** (`skills/gsab-js/SKILL.md`): teach Claude Code or any
   skills-aware agent to use gsab-js — copy it to `~/.claude/skills/gsab-js` (one-liner:
   `npx degit ajmalaksar25/gsab-js/skills/gsab-js ~/.claude/skills/gsab-js`, or copy from

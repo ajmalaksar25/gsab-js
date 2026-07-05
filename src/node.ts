@@ -146,21 +146,58 @@ export interface RefreshTokenOptions {
   clientSecret?: string;
   /** Default: process.env.GSAB_REFRESH_TOKEN */
   refreshToken?: string;
+  /** A single packed credential from `npx gsab-js env`. Default: process.env.GSAB_CREDENTIALS */
+  credentials?: string;
+}
+
+type PackedCredentials = { client_id: string; client_secret: string; refresh_token: string };
+
+function packCredentials(c: PackedCredentials): string {
+  return Buffer.from(JSON.stringify(c)).toString("base64url");
+}
+
+function unpackCredentials(blob: string): PackedCredentials {
+  try {
+    const c = JSON.parse(Buffer.from(blob.trim(), "base64url").toString("utf-8"));
+    if (c.client_id && c.client_secret && c.refresh_token) return c;
+  } catch {
+    /* fall through to the error below */
+  }
+  throw new AuthError(
+    "GSAB_CREDENTIALS is set but isn't a valid gsab credential value (it may be truncated or " +
+      "hand-edited). Re-run `npx gsab-js env` on your own machine and paste the fresh value.",
+  );
 }
 
 /** Credentials from a long-lived refresh token — for servers (Vercel, serverless, CI) where
- *  a browser sign-in isn't possible. Reads GSAB_CLIENT_ID / GSAB_CLIENT_SECRET /
- *  GSAB_REFRESH_TOKEN from the environment unless passed explicitly; get those three values
- *  by running `deployEnv()` once on your own machine. Synchronous — safe at module scope. */
+ *  a browser sign-in isn't possible. Reads the single GSAB_CREDENTIALS env var (printed by
+ *  `npx gsab-js env`), or the GSAB_CLIENT_ID / GSAB_CLIENT_SECRET / GSAB_REFRESH_TOKEN trio,
+ *  unless values are passed explicitly. Synchronous — safe at module scope. */
 export function refreshTokenAuth(opts: RefreshTokenOptions = {}): Credentials {
-  const clientId = opts.clientId ?? process.env.GSAB_CLIENT_ID;
-  const clientSecret = opts.clientSecret ?? process.env.GSAB_CLIENT_SECRET;
-  const refreshToken = opts.refreshToken ?? process.env.GSAB_REFRESH_TOKEN;
+  let clientId = opts.clientId ?? process.env.GSAB_CLIENT_ID;
+  let clientSecret = opts.clientSecret ?? process.env.GSAB_CLIENT_SECRET;
+  let refreshToken = opts.refreshToken ?? process.env.GSAB_REFRESH_TOKEN;
+  const packed = opts.credentials ?? process.env.GSAB_CREDENTIALS;
+  if (packed && !(clientId && clientSecret && refreshToken)) {
+    const c = unpackCredentials(packed);
+    clientId ??= c.client_id;
+    clientSecret ??= c.client_secret;
+    refreshToken ??= c.refresh_token;
+  }
   if (!clientId || !clientSecret || !refreshToken) {
+    const missing = [
+      !clientId && "GSAB_CLIENT_ID",
+      !clientSecret && "GSAB_CLIENT_SECRET",
+      !refreshToken && "GSAB_REFRESH_TOKEN",
+    ].filter(Boolean);
     throw new AuthError(
-      "refreshTokenAuth() needs a clientId, clientSecret, and refreshToken — pass them " +
-        "explicitly or set GSAB_CLIENT_ID / GSAB_CLIENT_SECRET / GSAB_REFRESH_TOKEN. " +
-        "Run deployEnv() from gsab/node on your own machine to print all three.",
+      missing.length < 3
+        ? `Almost configured — ${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} ` +
+          "missing (the other credential vars are set). Re-run `npx gsab-js env --split` and " +
+          "set the full set, or use the single GSAB_CREDENTIALS value instead."
+        : "No deploy credentials found. Run `npx gsab-js env` on your own machine and set the " +
+          "printed GSAB_CREDENTIALS env var on your host (Vercel/CI). Local scripts don't " +
+          "need this — loopbackAuth() signs in by itself.",
     );
   }
   const client = new OAuth2Client({ clientId, clientSecret });
@@ -172,18 +209,21 @@ export function refreshTokenAuth(opts: RefreshTokenOptions = {}): Credentials {
         return token ?? null;
       } catch (e) {
         throw new AuthError(
-          `Google sign-in expired or was revoked (${(e as Error).message}). Re-run deployEnv() ` +
-            "on your machine and update GSAB_REFRESH_TOKEN.",
+          `Google sign-in expired or was revoked (${(e as Error).message}). Re-run ` +
+            "`npx gsab-js env` on your machine and update the host's credentials.",
         );
       }
     },
   };
 }
 
-/** Sign in locally (via {@link loopbackAuth}, cached after the first run) and return the three
- *  values a deployed server needs for {@link refreshTokenAuth}, keyed by their env-var names:
- *  `{ GSAB_CLIENT_ID, GSAB_CLIENT_SECRET, GSAB_REFRESH_TOKEN }`. Treat the output as secrets. */
-export async function deployEnv(opts: LoopbackOptions = {}): Promise<Record<string, string>> {
+/** Sign in locally (via {@link loopbackAuth}, cached after the first run) and return what a
+ *  deployed server needs for {@link refreshTokenAuth}, keyed by env-var name. By default one
+ *  value: `{ GSAB_CREDENTIALS }` — a single var to set on the host. Pass `{ split: true }`
+ *  for the three-variable form. Treat the output as secrets. */
+export async function deployEnv(
+  opts: LoopbackOptions & { split?: boolean } = {},
+): Promise<Record<string, string>> {
   await loopbackAuth(opts); // guarantees a cached refresh token (may open a browser once)
   const clientSecretPath = opts.clientSecretPath ?? join(gsabConfigDir(), "client_secret.json");
   const tokenPath = opts.tokenPath ?? join(gsabConfigDir(), "token-js.json");
@@ -192,12 +232,17 @@ export async function deployEnv(opts: LoopbackOptions = {}): Promise<Record<stri
   if (typeof refresh !== "string" || !refresh) {
     throw new AuthError(
       `Signed in, but no refresh token was cached at ${tokenPath}. Delete that file and run ` +
-        "deployEnv() again to force a fresh consent.",
+        "`npx gsab-js env` again to force a fresh consent.",
     );
   }
+  if (opts.split) {
+    return {
+      GSAB_CLIENT_ID: client_id,
+      GSAB_CLIENT_SECRET: client_secret,
+      GSAB_REFRESH_TOKEN: refresh,
+    };
+  }
   return {
-    GSAB_CLIENT_ID: client_id,
-    GSAB_CLIENT_SECRET: client_secret,
-    GSAB_REFRESH_TOKEN: refresh,
+    GSAB_CREDENTIALS: packCredentials({ client_id, client_secret, refresh_token: refresh }),
   };
 }

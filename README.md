@@ -126,15 +126,15 @@ can still race).
 ### Deploying (Vercel / serverless / CI)
 
 A server has no browser to sign in with, so it uses a long-lived refresh token instead.
-Print your credentials **once, on your own machine** (this reuses — or triggers — the same
-loopback sign-in):
+One command on your own machine (it reuses — or triggers — the same loopback sign-in), **one
+env var** on the host:
 
 ```sh
-node --input-type=module -e "console.log(await (await import('gsab-js/node')).deployEnv())"
-# → { GSAB_CLIENT_ID, GSAB_CLIENT_SECRET, GSAB_REFRESH_TOKEN }   (treat as secrets)
+npx gsab-js env
+# GSAB_CREDENTIALS=…        ← set this one value on Vercel / Netlify / CI (it's a secret)
 ```
 
-Set those three as env vars on your host, and the server code is one line different:
+And the server code is one line different:
 
 ```js
 import { connect } from "gsab-js";
@@ -143,10 +143,17 @@ import { refreshTokenAuth } from "gsab-js/node";
 const db = connect({ spreadsheetId, auth: refreshTokenAuth() }).sheet(schema);
 ```
 
-The default scope is `drive.file`, so the token can only touch sheets gsab created — not the
-rest of your Drive. The site's live demo ([gsab.ajmalaksar.com/demo](https://gsab.ajmalaksar.com/demo))
-runs exactly this recipe: public no-auth reads in the browser, `refreshTokenAuth()` writes in
-Next.js route handlers.
+Debugging a deploy? `npx gsab-js doctor` (in that environment) says what's configured and
+does a real token refresh. Prefer separate variables? `npx gsab-js env --split` prints the
+`GSAB_CLIENT_ID` / `GSAB_CLIENT_SECRET` / `GSAB_REFRESH_TOKEN` trio, which
+`refreshTokenAuth()` also accepts.
+
+**If it leaks:** the credential is scoped to `drive.file` — it can only touch sheets gsab
+created, never the rest of your Drive — and you can revoke it any time at
+myaccount.google.com → Security → Third-party access. Keep it in your host's secret store;
+never commit it. The site's live demo
+([gsab.ajmalaksar.com/demo](https://gsab.ajmalaksar.com/demo)) runs exactly this recipe:
+public no-auth reads in the browser, `refreshTokenAuth()` writes in Next.js route handlers.
 
 **Concurrent editing:** `update()` writes only the **changed cells**, so two clients editing
 *different fields of the same row* at the same time don't clobber each other — only a true

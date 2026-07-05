@@ -50,9 +50,11 @@ import { refreshTokenAuth } from "gsab-js/node";           // sync, module-scope
 const db = connect({ spreadsheetId, auth: refreshTokenAuth() }).sheet(schema);
 ```
 
-Reads `GSAB_CLIENT_ID` / `GSAB_CLIENT_SECRET` / `GSAB_REFRESH_TOKEN` env vars. Print those
-three ONCE on the developer's machine (never in CI):
-`node --input-type=module -e "console.log(await (await import('gsab-js/node')).deployEnv())"`
+Reads the single `GSAB_CREDENTIALS` env var (or the `GSAB_CLIENT_ID` / `GSAB_CLIENT_SECRET` /
+`GSAB_REFRESH_TOKEN` trio). To mint it, run `npx gsab-js env` ONCE on the developer's machine
+(never in CI) and set the printed value in the host's secret store. To debug a deployment,
+run `npx gsab-js doctor` in that environment — it names what's missing and tests a real token
+refresh. Scope is drive.file (only gsab-created sheets); revocable at myaccount.google.com.
 
 ## Reactive cache + React
 
