@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 — 2026-07-05
+
+- **Agent skill bundled** (`skills/gsab-js/SKILL.md`): teach Claude Code or any
+  skills-aware agent to use gsab-js — copy it to `~/.claude/skills/gsab-js` (one-liner:
+  `npx degit ajmalaksar25/gsab-js/skills/gsab-js ~/.claude/skills/gsab-js`, or copy from
+  `node_modules/gsab-js/skills/gsab-js` after installing).
+- Build quality: `node:` builtins declared external (no more UNRESOLVED_IMPORT warnings);
+  publish/pack builds once instead of twice (dropped redundant `prepack`).
+
 ## 0.1.0 — 2026-07-05
 
 First npm release.

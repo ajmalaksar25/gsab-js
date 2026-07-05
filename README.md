@@ -154,6 +154,22 @@ same-*cell* edit is last-write-wins (Sheets has no conditional writes). Combined
 `watch()` (which sees writes from your app, other clients, and people editing the Sheet
 directly), a table stays live-collaborative.
 
+## Teach your coding agent
+
+A ready-made agent skill ships with the package (`skills/gsab-js/`) — quickstarts, the deploy
+recipe, and the rules of thumb (rate limits, per-cell writes, error types). Install it for
+Claude Code (or any skills-aware agent):
+
+```bash
+npx degit ajmalaksar25/gsab-js/skills/gsab-js ~/.claude/skills/gsab-js
+# or, from a project that already has gsab-js installed:
+cp -r node_modules/gsab-js/skills/gsab-js ~/.claude/skills/
+```
+
+The docs are also agent-friendly directly: every page has a raw-Markdown twin
+(`https://gsab.ajmalaksar.com/docs/javascript.md`) and the whole set is indexed at
+[/llms.txt](https://gsab.ajmalaksar.com/llms.txt).
+
 ## Roadmap
 
 - **Now:** `read` / `query` / `watch` over a public sheet (no auth) · **authenticated CRUD in

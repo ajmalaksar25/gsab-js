@@ -1,6 +1,6 @@
 {
   "name": "gsab-js",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Google Sheets as a Backend — JavaScript/TypeScript client (CRUD, server-side query, realtime watch) for the browser and Node.",
   "type": "module",
   "sideEffects": false,
@@ -41,7 +41,8 @@
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "skills"
   ],
   "scripts": {
     "build": "tsdown",
