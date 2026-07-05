@@ -6,4 +6,5 @@ export default defineConfig({
   dts: true,
   clean: true,
   platform: "neutral", // isomorphic: no Node-only globals baked in
+  external: [/^node:/], // the /node entry's builtins — external by design, not "unresolved"
 });

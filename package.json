@@ -45,7 +45,6 @@
   ],
   "scripts": {
     "build": "tsdown",
-    "prepack": "npm run build",
     "prepare": "npm run build",
     "check": "tsc --noEmit",
     "test": "node --import tsx --test test/*.test.ts",
