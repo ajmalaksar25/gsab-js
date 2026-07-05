@@ -2,12 +2,20 @@
  *  `gsab auth login`). Node-only; exported as the `gsab/node` subpath so the browser bundle
  *  never pulls in google-auth-library.
  *
+ *  On your machine (opens a browser once, then reuses the cached token):
+ *
  *      import { connect } from "gsab";
  *      import { loopbackAuth } from "gsab/node";
  *      const db = connect({ url, auth: await loopbackAuth() }).sheet(schema);
  *      await db.insert({ id: 1, name: "Ada" });
  *
- *  The first call opens a browser once; the refresh token is cached and reused after that. */
+ *  On a server (Vercel / serverless / CI — no browser, no filesystem cache): print your
+ *  credentials once with `deployEnv()`, set them as env vars, and use `refreshTokenAuth()`:
+ *
+ *      node --input-type=module -e "console.log(await (await import('gsab/node')).deployEnv())"
+ *      // → { GSAB_CLIENT_ID, GSAB_CLIENT_SECRET, GSAB_REFRESH_TOKEN }
+ *
+ *      const db = connect({ spreadsheetId, auth: refreshTokenAuth() }).sheet(schema); */
 import { authenticate } from "@google-cloud/local-auth";
 import { OAuth2Client } from "google-auth-library";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -128,5 +136,68 @@ export async function loopbackAuth(opts: LoopbackOptions = {}): Promise<Credenti
         );
       }
     },
+  };
+}
+
+export interface RefreshTokenOptions {
+  /** Default: process.env.GSAB_CLIENT_ID */
+  clientId?: string;
+  /** Default: process.env.GSAB_CLIENT_SECRET */
+  clientSecret?: string;
+  /** Default: process.env.GSAB_REFRESH_TOKEN */
+  refreshToken?: string;
+}
+
+/** Credentials from a long-lived refresh token — for servers (Vercel, serverless, CI) where
+ *  a browser sign-in isn't possible. Reads GSAB_CLIENT_ID / GSAB_CLIENT_SECRET /
+ *  GSAB_REFRESH_TOKEN from the environment unless passed explicitly; get those three values
+ *  by running `deployEnv()` once on your own machine. Synchronous — safe at module scope. */
+export function refreshTokenAuth(opts: RefreshTokenOptions = {}): Credentials {
+  const clientId = opts.clientId ?? process.env.GSAB_CLIENT_ID;
+  const clientSecret = opts.clientSecret ?? process.env.GSAB_CLIENT_SECRET;
+  const refreshToken = opts.refreshToken ?? process.env.GSAB_REFRESH_TOKEN;
+  if (!clientId || !clientSecret || !refreshToken) {
+    throw new AuthError(
+      "refreshTokenAuth() needs a clientId, clientSecret, and refreshToken — pass them " +
+        "explicitly or set GSAB_CLIENT_ID / GSAB_CLIENT_SECRET / GSAB_REFRESH_TOKEN. " +
+        "Run deployEnv() from gsab/node on your own machine to print all three.",
+    );
+  }
+  const client = new OAuth2Client({ clientId, clientSecret });
+  client.setCredentials({ refresh_token: refreshToken });
+  return {
+    async getToken(): Promise<string | null> {
+      try {
+        const { token } = await client.getAccessToken();
+        return token ?? null;
+      } catch (e) {
+        throw new AuthError(
+          `Google sign-in expired or was revoked (${(e as Error).message}). Re-run deployEnv() ` +
+            "on your machine and update GSAB_REFRESH_TOKEN.",
+        );
+      }
+    },
+  };
+}
+
+/** Sign in locally (via {@link loopbackAuth}, cached after the first run) and return the three
+ *  values a deployed server needs for {@link refreshTokenAuth}, keyed by their env-var names:
+ *  `{ GSAB_CLIENT_ID, GSAB_CLIENT_SECRET, GSAB_REFRESH_TOKEN }`. Treat the output as secrets. */
+export async function deployEnv(opts: LoopbackOptions = {}): Promise<Record<string, string>> {
+  await loopbackAuth(opts); // guarantees a cached refresh token (may open a browser once)
+  const clientSecretPath = opts.clientSecretPath ?? join(gsabConfigDir(), "client_secret.json");
+  const tokenPath = opts.tokenPath ?? join(gsabConfigDir(), "token-js.json");
+  const { client_id, client_secret } = readInstalledClient(clientSecretPath);
+  const refresh = readToken(tokenPath)?.refresh_token;
+  if (typeof refresh !== "string" || !refresh) {
+    throw new AuthError(
+      `Signed in, but no refresh token was cached at ${tokenPath}. Delete that file and run ` +
+        "deployEnv() again to force a fresh consent.",
+    );
+  }
+  return {
+    GSAB_CLIENT_ID: client_id,
+    GSAB_CLIENT_SECRET: client_secret,
+    GSAB_REFRESH_TOKEN: refresh,
   };
 }

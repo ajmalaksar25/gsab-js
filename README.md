@@ -123,6 +123,31 @@ the Node auth dependencies. Constraints match the Python library: no transaction
 `unique`/`primaryKey` are enforced read-check-write (concurrent inserts of the same new key
 can still race).
 
+### Deploying (Vercel / serverless / CI)
+
+A server has no browser to sign in with, so it uses a long-lived refresh token instead.
+Print your credentials **once, on your own machine** (this reuses — or triggers — the same
+loopback sign-in):
+
+```sh
+node --input-type=module -e "console.log(await (await import('gsab/node')).deployEnv())"
+# → { GSAB_CLIENT_ID, GSAB_CLIENT_SECRET, GSAB_REFRESH_TOKEN }   (treat as secrets)
+```
+
+Set those three as env vars on your host, and the server code is one line different:
+
+```js
+import { connect } from "gsab";
+import { refreshTokenAuth } from "gsab/node";
+
+const db = connect({ spreadsheetId, auth: refreshTokenAuth() }).sheet(schema);
+```
+
+The default scope is `drive.file`, so the token can only touch sheets gsab created — not the
+rest of your Drive. The site's live demo ([gsab.ajmalaksar.com/demo](https://gsab.ajmalaksar.com/demo))
+runs exactly this recipe: public no-auth reads in the browser, `refreshTokenAuth()` writes in
+Next.js route handlers.
+
 **Concurrent editing:** `update()` writes only the **changed cells**, so two clients editing
 *different fields of the same row* at the same time don't clobber each other — only a true
 same-*cell* edit is last-write-wins (Sheets has no conditional writes). Combined with

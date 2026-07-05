@@ -63,6 +63,12 @@
     "gsab"
   ],
   "homepage": "https://gsab.ajmalaksar.com",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ajmalaksar25/gsab-js.git"
+  },
+  "bugs": "https://github.com/ajmalaksar25/gsab-js/issues",
+  "author": "Ajmal Aksar <ajmalaksar25@gmail.com>",
   "license": "MIT",
   "engines": {
     "node": ">=18"
