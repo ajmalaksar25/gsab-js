@@ -7,7 +7,7 @@ import {
   toCell,
   valuesEqual,
 } from "./coerce";
-import { DuplicateKeyError, ValidationError } from "./errors";
+import { ConcurrencyError, DuplicateKeyError, ValidationError } from "./errors";
 import { runGvizQuery } from "./gviz";
 import { driveApi, sheetsApi } from "./rest";
 import { sleep } from "./util";
@@ -272,6 +272,27 @@ export class SheetManager {
     });
   }
 
+  /** Targeted cell-writes address rows by index from an earlier read — a concurrent writer
+   *  inserting or deleting rows shifts them, and a write would land on the WRONG row. Re-fetch
+   *  the key column just before writing and confirm every target row still holds its expected
+   *  key. Best-effort (Sheets has no transactions, so a writer can still slip into the
+   *  verify→write window) but it shrinks the race from the whole call to milliseconds. */
+  private async _rowsStillMatch(
+    token: string | null,
+    headers: string[],
+    keyField: string,
+    targets: { rowIndex: number; canon: string }[],
+    canon: (v: unknown) => string | null,
+  ): Promise<boolean> {
+    if (!targets.length) return true;
+    const col = headers.indexOf(keyField);
+    if (col < 0) return true; // key isn't a column — nothing to verify against
+    const letter = colLetter(col);
+    const res = await sheetsApi(token, this._valuesUrl(`${letter}:${letter}`));
+    const cells: unknown[][] = res.values || [];
+    return targets.every((t) => canon(cells[t.rowIndex - 1]?.[0]) === t.canon);
+  }
+
   /** One targeted cell-write per changed field on a row (fields not in the header are skipped).
    *  Writing only the changed cells — not the whole row — lets two clients edit different fields
    *  of the same row concurrently without clobbering each other. */
@@ -338,18 +359,38 @@ export class SheetManager {
   }
 
   /** Update every row matching `filters` with `updates` (omitted fields keep their value).
-   *  Returns the number of rows changed. */
+   *  Returns the number of rows changed. Row targets are key-verified against concurrent
+   *  writers (recomputed from a fresh read on drift; ConcurrencyError after 3 attempts). */
   async update(filters: Filters, updates: Row): Promise<number> {
     const token = await this._token();
-    const grid = await this._grid(token);
-    const matches = grid.rows.filter((x) => matchesFilters(x.record, filters, this.schema));
-    if (!matches.length) return 0;
     if (this.schema) validateRecord(this.schema, updates, true);
-    // Write only the changed cells (not the whole row) so concurrent edits to different
-    // fields of the same row don't clobber each other.
-    const data = matches.flatMap((m) => this._cellWrites(grid.headers, m.rowIndex, updates));
-    if (data.length) await this._batchWrite(token, data);
-    return matches.length;
+    const pk = this.schema?.primaryKey;
+    const pkType = pk ? this.schema?.fields[pk]?.type : undefined;
+    const canon = (v: unknown) =>
+      v == null || v === "" ? null : JSON.stringify(fromCell(v, pkType ?? FieldType.STRING));
+    for (let attempt = 0; ; attempt++) {
+      const grid = await this._grid(token);
+      const matches = grid.rows.filter((x) => matchesFilters(x.record, filters, this.schema));
+      if (!matches.length) return 0;
+      // Write only the changed cells (not the whole row) so concurrent edits to different
+      // fields of the same row don't clobber each other.
+      const data = matches.flatMap((m) => this._cellWrites(grid.headers, m.rowIndex, updates));
+      const targets = pk
+        ? matches
+            .map((m) => ({ rowIndex: m.rowIndex, canon: canon(m.record[pk]) ?? "" }))
+            .filter((t) => t.canon !== "")
+        : [];
+      if (await this._rowsStillMatch(token, grid.headers, pk ?? "", targets, canon)) {
+        if (data.length) await this._batchWrite(token, data);
+        return matches.length;
+      }
+      if (attempt >= 2) {
+        throw new ConcurrencyError(
+          "update() aborted: rows shifted under a concurrent writer. Retry the call.",
+          { retryable: true },
+        );
+      }
+    }
   }
 
   /** Delete every row matching `filters`. Returns the number of rows deleted. */
@@ -384,21 +425,35 @@ export class SheetManager {
       throw new ValidationError(`upsert() record is missing its key field '${key}'.`);
     }
     const token = await this._token();
-    const grid = await this._grid(token);
-    // Coerce the incoming key to the field type so a string "1" matches a stored integer 1.
-    const target = coerceValue(keyValue, this.schema?.fields[key]?.type);
-    const match = grid.rows.find((x) => valuesEqual(x.record[key], target));
-    if (match) {
+    const type = this.schema?.fields[key]?.type;
+    const canon = (v: unknown) =>
+      v == null || v === "" ? null : JSON.stringify(fromCell(v, type ?? FieldType.STRING));
+    for (let attempt = 0; ; attempt++) {
+      const grid = await this._grid(token);
+      // Coerce the incoming key to the field type so a string "1" matches a stored integer 1.
+      const target = coerceValue(keyValue, type);
+      const match = grid.rows.find((x) => valuesEqual(x.record[key], target));
+      if (!match) {
+        const prepared = this.schema ? applyDefaults(this.schema, data) : data;
+        if (this.schema) validateRecord(this.schema, prepared);
+        await this._append(token, [recordToRow(prepared, grid.headers, this.schema)]);
+        return "inserted";
+      }
       if (this.schema) validateRecord(this.schema, data, true);
       // Targeted cell-writes (only the supplied fields), same as update().
       const writes = this._cellWrites(grid.headers, match.rowIndex, data);
-      if (writes.length) await this._batchWrite(token, writes);
-      return "updated";
+      const targets = [{ rowIndex: match.rowIndex, canon: canon(match.record[key]) ?? "" }];
+      if (await this._rowsStillMatch(token, grid.headers, key, targets, canon)) {
+        if (writes.length) await this._batchWrite(token, writes);
+        return "updated";
+      }
+      if (attempt >= 2) {
+        throw new ConcurrencyError(
+          "upsert() aborted: rows shifted under a concurrent writer. Retry the call.",
+          { retryable: true },
+        );
+      }
     }
-    const prepared = this.schema ? applyDefaults(this.schema, data) : data;
-    if (this.schema) validateRecord(this.schema, prepared);
-    await this._append(token, [recordToRow(prepared, grid.headers, this.schema)]);
-    return "inserted";
   }
 
   /** Idempotent append: insert `data`, or no-op if a row with the same key already exists.
@@ -447,43 +502,58 @@ export class SheetManager {
       );
     }
     const token = await this._token();
-    const grid = await this._grid(token);
     const type = this.schema?.fields[key]?.type;
     const canon = (v: unknown) =>
       v == null || v === "" ? null : JSON.stringify(fromCell(v, type ?? FieldType.STRING));
-    const byKey = new Map<string, number>(); // canonical key -> sheet rowIndex
-    for (const r of grid.rows) {
-      const k = canon(r.record[key]);
-      if (k != null && !byKey.has(k)) byKey.set(k, r.rowIndex);
-    }
-    const writes: { range: string; values: (string | number | boolean)[][] }[] = [];
-    const appends: Row[] = [];
-    let updated = 0;
-    for (const rec of records) {
-      if (rec[key] == null || rec[key] === "") {
-        throw new ValidationError(`bulkUpsert() record is missing its key field '${key}'.`);
+    for (let attempt = 0; ; attempt++) {
+      const grid = await this._grid(token);
+      const byKey = new Map<string, number>(); // canonical key -> sheet rowIndex
+      for (const r of grid.rows) {
+        const k = canon(r.record[key]);
+        if (k != null && !byKey.has(k)) byKey.set(k, r.rowIndex);
       }
-      const k = canon(rec[key]);
-      const rowIndex = k != null ? byKey.get(k) : undefined;
-      if (rowIndex != null) {
-        if (this.schema) validateRecord(this.schema, rec, true);
-        writes.push(...this._cellWrites(grid.headers, rowIndex, rec));
-        updated++;
-      } else {
-        const prepared = this.schema ? applyDefaults(this.schema, rec) : rec;
-        if (this.schema) validateRecord(this.schema, prepared);
-        appends.push(prepared);
-        if (k != null) byKey.set(k, -1); // dedupe repeats within this batch (append once)
+      const writes: { range: string; values: (string | number | boolean)[][] }[] = [];
+      const appends: Row[] = [];
+      const targets: { rowIndex: number; canon: string }[] = [];
+      let updated = 0;
+      for (const rec of records) {
+        if (rec[key] == null || rec[key] === "") {
+          throw new ValidationError(`bulkUpsert() record is missing its key field '${key}'.`);
+        }
+        const k = canon(rec[key]);
+        const rowIndex = k != null ? byKey.get(k) : undefined;
+        if (rowIndex != null && rowIndex > 0) {
+          if (this.schema) validateRecord(this.schema, rec, true);
+          writes.push(...this._cellWrites(grid.headers, rowIndex, rec));
+          targets.push({ rowIndex, canon: k as string });
+          updated++;
+        } else if (rowIndex === -1) {
+          // A repeat of a key already queued for append in THIS batch — skip, don't duplicate.
+          continue;
+        } else {
+          const prepared = this.schema ? applyDefaults(this.schema, rec) : rec;
+          if (this.schema) validateRecord(this.schema, prepared);
+          appends.push(prepared);
+          if (k != null) byKey.set(k, -1); // marks "queued for append" for repeats
+        }
+      }
+      if (await this._rowsStillMatch(token, grid.headers, key, targets, canon)) {
+        if (writes.length) await this._batchWrite(token, writes);
+        if (appends.length) {
+          await this._append(
+            token,
+            appends.map((r) => recordToRow(r, grid.headers, this.schema)),
+          );
+        }
+        return { inserted: appends.length, updated };
+      }
+      if (attempt >= 2) {
+        throw new ConcurrencyError(
+          "bulkUpsert() aborted: rows shifted under a concurrent writer. Retry the call.",
+          { retryable: true },
+        );
       }
     }
-    if (writes.length) await this._batchWrite(token, writes);
-    if (appends.length) {
-      await this._append(
-        token,
-        appends.map((r) => recordToRow(r, grid.headers, this.schema)),
-      );
-    }
-    return { inserted: appends.length, updated };
   }
 
   // --- tab provisioning (authenticated) -------------------------------------

@@ -24,6 +24,7 @@ const DEFAULT_CODES: Record<string, string> = {
   ValidationError: "invalid_argument",
   DuplicateKeyError: "duplicate_key",
   APIError: "api_error",
+  ConcurrencyError: "concurrent_modification",
 };
 
 /** GSAB error hierarchy — every error subclasses GSABError, with a plain-language,
@@ -57,6 +58,9 @@ export class QuotaExceededError extends GSABError {}
 export class ValidationError extends GSABError {}
 export class DuplicateKeyError extends GSABError {}
 export class APIError extends GSABError {}
+/** Rows shifted under a concurrent writer while a targeted write was being prepared; the write
+ *  was aborted rather than landing on the wrong row. Retryable. */
+export class ConcurrencyError extends GSABError {}
 
 /** Statuses worth retrying: rate limiting and transient server errors. */
 export const RETRYABLE_STATUSES = new Set([429, 500, 502, 503, 504]);

@@ -41,7 +41,11 @@ function installFetch(opts: { grid?: unknown[][]; tabs?: string[] } = {}) {
     if (u.includes("fields=sheets.properties.title")) {
       json = { sheets: tabs.map((t) => ({ properties: { title: t } })) };
     } else if (u.includes("/values/") && method === "GET") {
-      json = u.includes("1%3A1") ? { values: [grid[0] ?? []] } : { values: grid };
+      json = u.includes("1%3A1")
+        ? { values: [grid[0] ?? []] }
+        : u.includes("%3AA") // key-column verify read (id is column A in these fixtures)
+          ? { values: grid.map((r) => [r[0]]) }
+          : { values: grid };
     }
     return new Response(JSON.stringify(json), {
       status: 200,
@@ -89,9 +93,12 @@ test("bulkUpsert splits updates vs inserts against ONE grid read", async () => {
     ]);
     assert.deepEqual(r, { inserted: 1, updated: 1 });
     const gridReads = calls.filter(
-      (c) => c.url.includes("/values/") && c.method === "GET" && !c.url.includes("1%3A1"),
+      (c) =>
+        c.url.includes("/values/") && c.method === "GET" &&
+        !c.url.includes("1%3A1") && !c.url.includes("%3AA"), // header + key-column verify reads excluded
     );
-    assert.equal(gridReads.length, 1); // the whole batch shares one read
+    assert.equal(gridReads.length, 1); // the whole batch shares one full-grid read
+    assert.ok(calls.some((c) => c.url.includes("%3AA"))); // …plus one key-column verify read
     assert.ok(calls.some((c) => c.url.endsWith("/values:batchUpdate"))); // the update
     assert.ok(calls.some((c) => c.url.includes(":append"))); // the insert
   } finally {

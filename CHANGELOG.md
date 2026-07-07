@@ -22,6 +22,11 @@ users (each with their own Google Drive, syncing from flaky clients) needs.
   tab's header row (new columns land at the end; existing columns are never reordered or
   removed). Reads/writes map by header name, so a field added to a schema after tabs were
   created would previously be silently dropped on write.
+- **Concurrency guard**: `update()` / `upsert()` / `bulkUpsert()` verify the key column right
+  before their targeted cell-writes; if a concurrent writer shifted rows since the read, they
+  re-read and retarget (3 attempts, then a retryable `ConcurrencyError`) instead of writing to
+  the wrong row. Also fixed: a repeated new key inside one `bulkUpsert` batch no longer emits
+  a broken row -1 write — repeats are skipped.
 - **Typed error metadata**: every `GSABError` now carries `status`, a stable `code`
   (e.g. `rate_limited` vs `quota_exceeded`), `retryable`, and `retryAfter` — branch on codes,
   not message text. A 429 honors the response's `Retry-After` header.
