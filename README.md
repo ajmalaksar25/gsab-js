@@ -185,3 +185,9 @@ The docs are also agent-friendly directly: every page has a raw-Markdown twin
   **React bindings** (`useSheet` over the cache).
 - **Next:** browser auth via Google Identity Services (a Web OAuth client), then a hosted
   sign-in page for near-zero-setup browser auth.
+- **Known gap — concurrent-writer row race:** `update`/`bulkUpsert` target cells by row index
+  from an earlier grid read; a concurrent insert/delete by another writer shifts rows between
+  read and write, and a targeted cell write can land on the wrong row (observed in production:
+  a neighbouring row's cell overwritten). Planned fix: verify the primary-key cell of every
+  target row in the same batch (or re-read + retry on mismatch) before writing. Until then,
+  avoid two writers on one tab at the same moment.
