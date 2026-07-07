@@ -18,6 +18,10 @@ users (each with their own Google Drive, syncing from flaky clients) needs.
 - **Per-user tab provisioning**: `ensureTab()` (add this manager's tab to an existing spreadsheet
   and write its header if missing — idempotent) and `listTabs()`. `createSheet()` still makes a
   whole new spreadsheet; `ensureTab()` adds a tab to one you already have.
+- **Schema evolution**: `ensureTab()` also appends any schema fields missing from an existing
+  tab's header row (new columns land at the end; existing columns are never reordered or
+  removed). Reads/writes map by header name, so a field added to a schema after tabs were
+  created would previously be silently dropped on write.
 - **Typed error metadata**: every `GSABError` now carries `status`, a stable `code`
   (e.g. `rate_limited` vs `quota_exceeded`), `retryable`, and `retryAfter` — branch on codes,
   not message text. A 429 honors the response's `Retry-After` header.

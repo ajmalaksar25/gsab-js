@@ -128,6 +128,29 @@ test("ensureTab is a no-op when the tab and header already exist", async () => {
   }
 });
 
+test("ensureTab appends schema fields missing from an existing header (schema evolution)", async () => {
+  const conn = new SheetConnection({ spreadsheetId: SID, auth: { getToken: async () => "TOK" } });
+  const db = conn.sheet(
+    new Schema({
+      name: "users",
+      fields: {
+        id: { type: "integer", primaryKey: true },
+        name: { type: "string" },
+        plan: { type: "string" },
+        tier: { type: "string" }, // new field, not in the live header
+      },
+    }),
+  );
+  const { calls, restore } = installFetch(); // live header is [id, name, plan]
+  try {
+    await db.ensureTab();
+    const put = calls.find((c) => c.method === "PUT");
+    assert.deepEqual(put!.body.values, [["id", "name", "plan", "tier"]]); // appended, not reordered
+  } finally {
+    restore();
+  }
+});
+
 test("listTabs returns the worksheet titles", async () => {
   const db = boundDb();
   const { restore } = installFetch({ tabs: ["users", "tx_u1", "tx_u2"] });

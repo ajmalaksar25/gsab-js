@@ -496,9 +496,11 @@ export class SheetManager {
     return sheets.map((s) => s.properties?.title).filter((t): t is string => Boolean(t));
   }
 
-  /** Ensure this manager's tab exists in the bound spreadsheet (adding it if missing) and that
-   *  its header row is written when a schema is set. Idempotent — safe to call before every
-   *  write. Use it to provision a per-user tab in a shared spreadsheet:
+  /** Ensure this manager's tab exists in the bound spreadsheet (adding it if missing), that
+   *  its header row is written when a schema is set, and that the header contains every schema
+   *  field — fields added to a schema after a tab was created are appended as new columns
+   *  (existing columns are never reordered or removed, so live data is untouched). Idempotent —
+   *  safe to call before every write. Use it to provision a per-user tab in a shared spreadsheet:
    *
    *      await connect({ spreadsheetId, auth }).sheet({ name: `tx_${userId}`, fields }).ensureTab();
    *
@@ -517,12 +519,22 @@ export class SheetManager {
     }
     if (this.schema) {
       const res = await sheetsApi(token, this._valuesUrl("1:1"));
-      const hasHeader = Boolean(res.values && res.values[0] && res.values[0].length);
-      if (!hasHeader) {
+      const header: string[] = ((res.values && res.values[0]) || []).map(String);
+      if (!header.length) {
         await sheetsApi(token, this._valuesUrl("A1", "?valueInputOption=RAW"), {
           method: "PUT",
           body: { values: [this.schema.fieldNames] },
         });
+      } else {
+        // Schema evolution: append columns the live header is missing. Reads/writes map by
+        // header name, so without this a new schema field would be silently dropped on write.
+        const missing = this.schema.fieldNames.filter((n) => !header.includes(n));
+        if (missing.length) {
+          await sheetsApi(token, this._valuesUrl("A1", "?valueInputOption=RAW"), {
+            method: "PUT",
+            body: { values: [[...header, ...missing]] },
+          });
+        }
       }
     }
     return this;
