@@ -234,7 +234,8 @@ export class SheetManager {
     for (const field of this.schema.uniqueFields) {
       const type = this.schema.fields[field].type;
       // Canonicalize both sides to the same typed form so "1" and 1 collide for an integer key.
-      const canon = (v: unknown) => (v == null || v === "" ? null : JSON.stringify(fromCell(v, type)));
+      const canon = (v: unknown) =>
+      v == null || v === "" ? null : JSON.stringify(fromCell(v, type ?? FieldType.STRING));
       const seen = new Set(existing.map((r) => canon(r[field])).filter((v) => v != null));
       for (const rec of incoming) {
         const key = canon(rec[field]);
@@ -398,6 +399,133 @@ export class SheetManager {
     if (this.schema) validateRecord(this.schema, prepared);
     await this._append(token, [recordToRow(prepared, grid.headers, this.schema)]);
     return "inserted";
+  }
+
+  /** Idempotent append: insert `data`, or no-op if a row with the same key already exists.
+   *  Safe for a flaky client that retries a timed-out insert — a retry returns "exists" instead
+   *  of creating a duplicate. Give each record a stable client-generated id (a UUID primaryKey)
+   *  so the key is known before the write. Key defaults to the schema's primaryKey.
+   *
+   *  (Like insert(), the existence check is read-then-write, so two *simultaneous* first-time
+   *  inserts of the same key can still both append — Sheets has no atomic conditional write.
+   *  It removes the far more common single-client retry duplicate.) */
+  async insertIdempotent(data: Row, opts: { key?: string } = {}): Promise<"inserted" | "exists"> {
+    const key = opts.key ?? this.schema?.primaryKey ?? undefined;
+    if (!key) {
+      throw new ValidationError(
+        "insertIdempotent() needs a key — set a primaryKey on the schema or pass { key }.",
+      );
+    }
+    if (data[key] == null || data[key] === "") {
+      throw new ValidationError(`insertIdempotent() record is missing its key field '${key}'.`);
+    }
+    const token = await this._token();
+    const grid = await this._grid(token);
+    const type = this.schema?.fields[key]?.type;
+    const canon = (v: unknown) =>
+      v == null || v === "" ? null : JSON.stringify(fromCell(v, type ?? FieldType.STRING));
+    const target = canon(data[key]);
+    if (grid.rows.some((r) => canon(r.record[key]) === target)) return "exists";
+    const prepared = this.schema ? applyDefaults(this.schema, data) : data;
+    if (this.schema) validateRecord(this.schema, prepared);
+    await this._append(token, [recordToRow(prepared, grid.headers, this.schema)]);
+    return "inserted";
+  }
+
+  /** Upsert many records against ONE grid read: existing keys get targeted cell-writes, new
+   *  keys are appended in a single call. Far cheaper than N `upsert()` calls (which each re-read
+   *  the whole sheet). Key defaults to the schema's primaryKey. Returns the split counts. */
+  async bulkUpsert(
+    records: Row[],
+    opts: { key?: string } = {},
+  ): Promise<{ inserted: number; updated: number }> {
+    if (!records.length) return { inserted: 0, updated: 0 };
+    const key = opts.key ?? this.schema?.primaryKey ?? undefined;
+    if (!key) {
+      throw new ValidationError(
+        "bulkUpsert() needs a key — set a primaryKey on the schema or pass { key }.",
+      );
+    }
+    const token = await this._token();
+    const grid = await this._grid(token);
+    const type = this.schema?.fields[key]?.type;
+    const canon = (v: unknown) =>
+      v == null || v === "" ? null : JSON.stringify(fromCell(v, type ?? FieldType.STRING));
+    const byKey = new Map<string, number>(); // canonical key -> sheet rowIndex
+    for (const r of grid.rows) {
+      const k = canon(r.record[key]);
+      if (k != null && !byKey.has(k)) byKey.set(k, r.rowIndex);
+    }
+    const writes: { range: string; values: (string | number | boolean)[][] }[] = [];
+    const appends: Row[] = [];
+    let updated = 0;
+    for (const rec of records) {
+      if (rec[key] == null || rec[key] === "") {
+        throw new ValidationError(`bulkUpsert() record is missing its key field '${key}'.`);
+      }
+      const k = canon(rec[key]);
+      const rowIndex = k != null ? byKey.get(k) : undefined;
+      if (rowIndex != null) {
+        if (this.schema) validateRecord(this.schema, rec, true);
+        writes.push(...this._cellWrites(grid.headers, rowIndex, rec));
+        updated++;
+      } else {
+        const prepared = this.schema ? applyDefaults(this.schema, rec) : rec;
+        if (this.schema) validateRecord(this.schema, prepared);
+        appends.push(prepared);
+        if (k != null) byKey.set(k, -1); // dedupe repeats within this batch (append once)
+      }
+    }
+    if (writes.length) await this._batchWrite(token, writes);
+    if (appends.length) {
+      await this._append(
+        token,
+        appends.map((r) => recordToRow(r, grid.headers, this.schema)),
+      );
+    }
+    return { inserted: appends.length, updated };
+  }
+
+  // --- tab provisioning (authenticated) -------------------------------------
+
+  /** List the tab (worksheet) titles in the bound spreadsheet. */
+  async listTabs(): Promise<string[]> {
+    const token = await this._token();
+    const meta = await sheetsApi(token, `/${this._id}?fields=sheets.properties.title`);
+    const sheets: { properties?: { title?: string } }[] = meta.sheets || [];
+    return sheets.map((s) => s.properties?.title).filter((t): t is string => Boolean(t));
+  }
+
+  /** Ensure this manager's tab exists in the bound spreadsheet (adding it if missing) and that
+   *  its header row is written when a schema is set. Idempotent — safe to call before every
+   *  write. Use it to provision a per-user tab in a shared spreadsheet:
+   *
+   *      await connect({ spreadsheetId, auth }).sheet({ name: `tx_${userId}`, fields }).ensureTab();
+   *
+   *  (`createSheet()` makes a whole NEW spreadsheet; `ensureTab()` adds a tab to an existing one.) */
+  async ensureTab(): Promise<this> {
+    const token = await this._token();
+    const meta = await sheetsApi(token, `/${this._id}?fields=sheets.properties.title`);
+    const titles: string[] = (meta.sheets || []).map(
+      (s: { properties?: { title?: string } }) => s.properties?.title,
+    );
+    if (!titles.includes(this._tab)) {
+      await sheetsApi(token, `/${this._id}:batchUpdate`, {
+        method: "POST",
+        body: { requests: [{ addSheet: { properties: { title: this._tab } } }] },
+      });
+    }
+    if (this.schema) {
+      const res = await sheetsApi(token, this._valuesUrl("1:1"));
+      const hasHeader = Boolean(res.values && res.values[0] && res.values[0].length);
+      if (!hasHeader) {
+        await sheetsApi(token, this._valuesUrl("A1", "?valueInputOption=RAW"), {
+          method: "PUT",
+          body: { values: [this.schema.fieldNames] },
+        });
+      }
+    }
+    return this;
   }
 
   // --- sharing (Drive) ------------------------------------------------------

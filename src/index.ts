@@ -15,6 +15,8 @@ export { SheetCache, createCache } from "./cache";
 export type { CacheOptions, CacheEvent } from "./cache";
 export { Schema, FieldType, normalizeSchema } from "./schema";
 export type { FieldDef, SchemaDef, FieldTypeName } from "./schema";
+export { MemoryTokenStore } from "./store";
+export type { TokenStore, StoredCredential } from "./store";
 export {
   GSABError,
   AuthError,
@@ -26,6 +28,7 @@ export {
   DuplicateKeyError,
   APIError,
 } from "./errors";
+export type { GSABErrorOptions } from "./errors";
 
 import { SheetConnection } from "./connection";
 import type { ConnectOptions } from "./connection";

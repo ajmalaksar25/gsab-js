@@ -13,6 +13,7 @@
  *  Experimental — polling (not push), inheriting the same envelope as `watch()`. */
 import { sleep } from "./util";
 import type { ChangeSet, Filters, Row, SheetManager } from "./manager";
+import type { Schema } from "./schema";
 
 export interface CacheOptions {
   /** Milliseconds between polls (default 2000). */
@@ -97,6 +98,11 @@ export class SheetCache {
   /** True once a snapshot has loaded at least once (it survives `stop()`). */
   get loaded(): boolean {
     return this._loaded;
+  }
+
+  /** The schema of the underlying sheet (drives typed rendering in `<SheetTable>`), or undefined. */
+  get schema(): Schema | undefined {
+    return this.manager.schema;
   }
 
   /** Read once and diff against the current snapshot, emitting events. `start()` calls this

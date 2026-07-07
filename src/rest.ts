@@ -4,7 +4,7 @@
  *  and in Node (with a loopback token). Transient failures retry with backoff; other failures
  *  map to the GSAB error hierarchy. */
 import { AuthError, ConnectionError, errorForStatus, RETRYABLE_STATUSES } from "./errors";
-import { sleep } from "./util";
+import { backoffDelay, parseRetryAfter, sleep } from "./util";
 
 const SHEETS = "https://sheets.googleapis.com/v4/spreadsheets";
 const DRIVE = "https://www.googleapis.com/drive/v3";
@@ -42,22 +42,26 @@ async function apiFetch(url: string, token: string, opts: ApiOptions = {}): Prom
       resp = await fetch(url, { ...init, signal: AbortSignal.timeout(timeout) });
     } catch (e) {
       if (attempt < retries) {
-        await sleep(baseDelay * 2 ** attempt);
+        await sleep(backoffDelay(attempt, baseDelay));
         continue;
       }
       throw new ConnectionError(
         `Network error calling Google (${(e as Error).message}). Check your connection and try again.`,
+        { retryable: true, cause: e },
       );
     }
+    const retryAfter = parseRetryAfter(resp.headers.get("retry-after"));
     if (RETRYABLE_STATUSES.has(resp.status) && attempt < retries) {
-      await sleep(baseDelay * 2 ** attempt);
+      await sleep(backoffDelay(attempt, baseDelay, retryAfter));
       continue;
     }
     const text = await resp.text();
-    if (resp.status >= 400) throw errorForStatus(resp.status, detailFrom(text) || resp.statusText);
+    if (resp.status >= 400) {
+      throw errorForStatus(resp.status, detailFrom(text) || resp.statusText, retryAfter);
+    }
     return text ? JSON.parse(text) : {};
   }
-  throw new ConnectionError("Request failed after retries.");
+  throw new ConnectionError("Request failed after retries.", { retryable: true });
 }
 
 function requireToken(token: string | null): string {

@@ -5,7 +5,7 @@
  *  the browser; on a private sheet, pass an OAuth access token. */
 import { ConnectionError, errorForStatus, RETRYABLE_STATUSES, ValidationError } from "./errors";
 import type { Row } from "./manager";
-import { sleep } from "./util";
+import { backoffDelay, parseRetryAfter, sleep } from "./util";
 
 const GVIZ = (id: string) => `https://docs.google.com/spreadsheets/d/${id}/gviz/tq`;
 
@@ -76,22 +76,24 @@ export async function runGvizQuery(id: string, sql: string, opts: GvizOptions = 
       resp = await fetch(url, { headers, signal: AbortSignal.timeout(timeout) });
     } catch (e) {
       if (attempt < retries) {
-        await sleep(baseDelay * 2 ** attempt);
+        await sleep(backoffDelay(attempt, baseDelay));
         continue;
       }
       throw new ConnectionError(
         `Network error running query (${(e as Error).message}). Check your connection and try again.`,
+        { retryable: true, cause: e },
       );
     }
+    const retryAfter = parseRetryAfter(resp.headers.get("retry-after"));
     if (RETRYABLE_STATUSES.has(resp.status) && attempt < retries) {
-      await sleep(baseDelay * 2 ** attempt);
+      await sleep(backoffDelay(attempt, baseDelay, retryAfter));
       continue;
     }
     if (resp.status >= 400) {
       const text = (await resp.text()).slice(0, 200).trim();
-      throw errorForStatus(resp.status, text || resp.statusText);
+      throw errorForStatus(resp.status, text || resp.statusText, retryAfter);
     }
     return parseGvizResponse(await resp.text(), opts.dropUnlabeled);
   }
-  throw new ConnectionError("Query failed after retries.");
+  throw new ConnectionError("Query failed after retries.", { retryable: true });
 }

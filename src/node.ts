@@ -24,6 +24,10 @@ import { dirname, join } from "node:path";
 
 import type { Credentials } from "./connection";
 import { AuthError } from "./errors";
+import type { StoredCredential, TokenStore } from "./store";
+
+export { MemoryTokenStore } from "./store";
+export type { StoredCredential, TokenStore } from "./store";
 
 const DRIVE_FILE = "https://www.googleapis.com/auth/drive.file";
 /** DIY: read/write ALL of the user's sheets (broader, sensitive scope). */
@@ -245,4 +249,135 @@ export async function deployEnv(
   return {
     GSAB_CREDENTIALS: packCredentials({ client_id, client_secret, refresh_token: refresh }),
   };
+}
+
+// --- multi-tenant auth (each user their own Google account / refresh token) ---------------
+
+export interface UserAuthOptions {
+  /** Shared app OAuth client id. Default: process.env.GSAB_CLIENT_ID. Used for every user
+   *  unless their StoredCredential carries its own clientId/clientSecret. */
+  clientId?: string;
+  /** Shared app OAuth client secret. Default: process.env.GSAB_CLIENT_SECRET. */
+  clientSecret?: string;
+}
+
+/** Build a per-user `Credentials` factory backed by a {@link TokenStore}, for a backend that
+ *  serves many users, each writing to their OWN Google Drive.
+ *
+ *      const userAuth = createUserAuth(store);            // once, at startup
+ *      const db = connect({ spreadsheetId, auth: userAuth(userId) }).sheet(schema);
+ *
+ *  Unlike calling `refreshTokenAuth()` per request (which builds a fresh OAuth2Client every
+ *  time), this caches one `OAuth2Client` per user, so a user's short-lived access token is
+ *  reused across requests instead of being re-minted each call. Rotated refresh tokens are
+ *  written back to the store. Obtain each user's refresh token first with
+ *  {@link buildConsentUrl} + {@link exchangeAuthCode}. */
+export function createUserAuth(
+  store: TokenStore,
+  opts: UserAuthOptions = {},
+): (userId: string) => Credentials {
+  const appClientId = opts.clientId ?? process.env.GSAB_CLIENT_ID;
+  const appClientSecret = opts.clientSecret ?? process.env.GSAB_CLIENT_SECRET;
+  const clients = new Map<string, OAuth2Client>();
+
+  return (userId: string): Credentials => ({
+    async getToken(): Promise<string | null> {
+      let client = clients.get(userId);
+      if (!client) {
+        const cred = await store.get(userId);
+        if (!cred?.refreshToken) {
+          throw new AuthError(
+            `No Google credentials stored for user '${userId}'. Send them through the OAuth ` +
+              "connect flow (buildConsentUrl → exchangeAuthCode) and save the result first.",
+            { code: "unauthenticated" },
+          );
+        }
+        client = new OAuth2Client({
+          clientId: cred.clientId ?? appClientId,
+          clientSecret: cred.clientSecret ?? appClientSecret,
+        });
+        client.setCredentials({ refresh_token: cred.refreshToken });
+        // Persist a rotated refresh token (Google occasionally issues a new one).
+        client.on("tokens", (t) => {
+          if (t.refresh_token) void store.set(userId, { ...cred, refreshToken: t.refresh_token });
+        });
+        clients.set(userId, client);
+      }
+      try {
+        const { token } = await client.getAccessToken();
+        return token ?? null;
+      } catch (e) {
+        clients.delete(userId); // rebuild from the store next call (creds may have been updated)
+        throw new AuthError(
+          `Google sign-in for user '${userId}' expired or was revoked (${(e as Error).message}). ` +
+            "Have them reconnect their Google account.",
+          { code: "unauthenticated", cause: e },
+        );
+      }
+    },
+  });
+}
+
+export interface ConsentUrlOptions {
+  /** OAuth client id. Default: process.env.GSAB_CLIENT_ID. */
+  clientId?: string;
+  /** The redirect URI registered on the OAuth client (your backend's callback route). */
+  redirectUri: string;
+  /** Scopes to request. Default: the friction-free `drive.file`. */
+  scopes?: string[];
+  /** Opaque value round-tripped to your callback (carry your own userId/CSRF token here). */
+  state?: string;
+}
+
+/** Build the Google consent-screen URL to send a user to so they authorize your app against
+ *  THEIR Google account. Uses `access_type=offline` + `prompt=consent` so Google returns a
+ *  refresh token (required by {@link createUserAuth}). Handle the redirect in your callback and
+ *  pass the `code` to {@link exchangeAuthCode}. */
+export function buildConsentUrl(opts: ConsentUrlOptions): string {
+  const clientId = opts.clientId ?? process.env.GSAB_CLIENT_ID;
+  if (!clientId) {
+    throw new AuthError("buildConsentUrl() needs a clientId (or set GSAB_CLIENT_ID).");
+  }
+  const client = new OAuth2Client({ clientId, redirectUri: opts.redirectUri });
+  return client.generateAuthUrl({
+    access_type: "offline",
+    prompt: "consent",
+    scope: opts.scopes ?? [DRIVE_FILE],
+    state: opts.state,
+  });
+}
+
+export interface AuthCodeExchangeOptions {
+  /** OAuth client id. Default: process.env.GSAB_CLIENT_ID. */
+  clientId?: string;
+  /** OAuth client secret. Default: process.env.GSAB_CLIENT_SECRET. */
+  clientSecret?: string;
+  /** The same redirectUri used to build the consent URL. */
+  redirectUri: string;
+  /** The `code` query param Google sent to your callback. */
+  code: string;
+}
+
+/** Exchange an OAuth authorization `code` (from your callback) for a {@link StoredCredential}
+ *  you persist via a {@link TokenStore}. Throws if Google returned no refresh token — build the
+ *  consent URL with {@link buildConsentUrl} (offline + consent) so it does. */
+export async function exchangeAuthCode(
+  opts: AuthCodeExchangeOptions,
+): Promise<StoredCredential> {
+  const clientId = opts.clientId ?? process.env.GSAB_CLIENT_ID;
+  const clientSecret = opts.clientSecret ?? process.env.GSAB_CLIENT_SECRET;
+  if (!clientId || !clientSecret) {
+    throw new AuthError(
+      "exchangeAuthCode() needs clientId/clientSecret (or GSAB_CLIENT_ID / GSAB_CLIENT_SECRET).",
+    );
+  }
+  const client = new OAuth2Client({ clientId, clientSecret, redirectUri: opts.redirectUri });
+  const { tokens } = await client.getToken(opts.code);
+  if (!tokens.refresh_token) {
+    throw new AuthError(
+      "Google returned no refresh token. Build the consent URL with access_type=offline and " +
+        "prompt=consent (buildConsentUrl does this), and make sure the user is re-consenting.",
+    );
+  }
+  return { refreshToken: tokens.refresh_token, clientId, clientSecret };
 }

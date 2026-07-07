@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.3.0 — 2026-07-07
+
+Multi-tenant auth and mobile-grade write reliability — the pieces a real backend serving many
+users (each with their own Google Drive, syncing from flaky clients) needs.
+
+- **Multi-tenant auth** (`gsab-js/node`): `createUserAuth(store)` returns a per-user
+  `Credentials` factory backed by a pluggable `TokenStore` — one cached `OAuth2Client` per user
+  (short-lived access tokens are reused across requests instead of re-minted every call), with
+  rotated refresh tokens written back. `buildConsentUrl()` + `exchangeAuthCode()` obtain each
+  user's refresh token via the standard authorization-code flow. `MemoryTokenStore` ships as the
+  default; the `TokenStore` / `StoredCredential` types are exported from the root too.
+- **Idempotent writes**: `insertIdempotent(record, { key })` — a retried, timed-out insert
+  returns `"exists"` instead of creating a duplicate. Give records a stable client-generated id.
+- **`bulkUpsert(records, { key })`**: upsert a whole batch against **one** grid read (existing
+  keys → targeted cell-writes, new keys → a single append), instead of a full-sheet read per row.
+- **Per-user tab provisioning**: `ensureTab()` (add this manager's tab to an existing spreadsheet
+  and write its header if missing — idempotent) and `listTabs()`. `createSheet()` still makes a
+  whole new spreadsheet; `ensureTab()` adds a tab to one you already have.
+- **Typed error metadata**: every `GSABError` now carries `status`, a stable `code`
+  (e.g. `rate_limited` vs `quota_exceeded`), `retryable`, and `retryAfter` — branch on codes,
+  not message text. A 429 honors the response's `Retry-After` header.
+- **Backoff jitter**: retries now use full jitter (and honor `Retry-After`) so many clients
+  don't retry in lockstep.
+- **Tests**: added coverage for the previously-untested read/retry paths (`gviz`, `rest`,
+  `watch`) plus the new auth/idempotency/provisioning surface.
+
 ## 0.2.0 — 2026-07-05
 
 Deploy setup is now one command and one variable.

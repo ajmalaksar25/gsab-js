@@ -3,7 +3,7 @@ import { test } from "node:test";
 
 import { ValidationError } from "../src/errors.ts";
 import { Schema } from "../src/schema.ts";
-import { applyDefaults, validateRecord } from "../src/validate.ts";
+import { applyDefaults, collectErrors, validateRecord } from "../src/validate.ts";
 
 const schema = new Schema({
   name: "users",
@@ -35,4 +35,12 @@ test("numeric and string constraints are enforced", () => {
     ValidationError,
   ); // pattern
   validateRecord(schema, { id: 1, name: "Ada", email: "a@b.co" }); // ok
+});
+
+test("collectErrors returns every violation as a { field: message } map without throwing", () => {
+  const errs = collectErrors(schema, { id: 0, name: "A" }); // minValue + minLength
+  assert.ok(errs.id);
+  assert.ok(errs.name);
+  assert.equal(Object.keys(errs).length, 2); // email optional, plan has a default
+  assert.deepEqual(collectErrors(schema, { id: 1, name: "Ada" }), {}); // valid -> no errors
 });
