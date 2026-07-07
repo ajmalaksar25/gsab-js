@@ -393,23 +393,44 @@ export class SheetManager {
     }
   }
 
-  /** Delete every row matching `filters`. Returns the number of rows deleted. */
+  /** Delete every row matching `filters`. Returns the number of rows deleted. The most
+   *  dangerous op under concurrency — row targets are key-verified like update()'s, and drift
+   *  triggers a re-read (3 attempts, then a retryable ConcurrencyError). */
   async delete(filters: Filters): Promise<number> {
     const token = await this._token();
-    const grid = await this._grid(token);
-    const matches = grid.rows.filter((x) => matchesFilters(x.record, filters, this.schema));
-    if (!matches.length) return 0;
-    const gid = await this._sheetGid(token);
-    const requests = matches
-      .map((m) => m.rowIndex)
-      .sort((a, b) => b - a) // delete bottom-up so earlier removals don't shift later indices
-      .map((r) => ({
-        deleteDimension: {
-          range: { sheetId: gid, dimension: "ROWS", startIndex: r - 1, endIndex: r },
-        },
-      }));
-    await sheetsApi(token, `/${this._id}:batchUpdate`, { method: "POST", body: { requests } });
-    return matches.length;
+    const pk = this.schema?.primaryKey;
+    const pkType = pk ? this.schema?.fields[pk]?.type : undefined;
+    const canon = (v: unknown) =>
+      v == null || v === "" ? null : JSON.stringify(fromCell(v, pkType ?? FieldType.STRING));
+    for (let attempt = 0; ; attempt++) {
+      const grid = await this._grid(token);
+      const matches = grid.rows.filter((x) => matchesFilters(x.record, filters, this.schema));
+      if (!matches.length) return 0;
+      const targets = pk
+        ? matches
+            .map((m) => ({ rowIndex: m.rowIndex, canon: canon(m.record[pk]) ?? "" }))
+            .filter((t) => t.canon !== "")
+        : [];
+      if (await this._rowsStillMatch(token, grid.headers, pk ?? "", targets, canon)) {
+        const gid = await this._sheetGid(token);
+        const requests = matches
+          .map((m) => m.rowIndex)
+          .sort((a, b) => b - a) // delete bottom-up so earlier removals don't shift later indices
+          .map((r) => ({
+            deleteDimension: {
+              range: { sheetId: gid, dimension: "ROWS", startIndex: r - 1, endIndex: r },
+            },
+          }));
+        await sheetsApi(token, `/${this._id}:batchUpdate`, { method: "POST", body: { requests } });
+        return matches.length;
+      }
+      if (attempt >= 2) {
+        throw new ConcurrencyError(
+          "delete() aborted: rows shifted under a concurrent writer. Retry the call.",
+          { retryable: true },
+        );
+      }
+    }
   }
 
   /** Insert, or update the row whose key matches (default key = the schema's primaryKey). */

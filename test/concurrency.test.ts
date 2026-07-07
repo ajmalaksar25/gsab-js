@@ -97,3 +97,21 @@ test("update verifies by primary key and retries once on drift", async () => {
     restore();
   }
 });
+
+test("delete verifies by primary key and retargets after a shift", async () => {
+  const gridBefore = [["id", "name"], ["1", "Ada"]];
+  const gridAfter = [["id", "name"], ["9", "New"], ["1", "Ada"]];
+  const { calls, restore } = installFetch({
+    grids: [gridBefore, gridAfter],
+    keyCols: [[["id"], ["9"], ["1"]], [["id"], ["9"], ["1"]]],
+  });
+  try {
+    const n = await db().delete({ id: 1 });
+    assert.equal(n, 1);
+    const del = calls.find((c) => c.url.endsWith(`${SID}:batchUpdate`) && c.body?.requests?.[0]?.deleteDimension);
+    // Ada is at sheet row 3 → zero-based startIndex 2, not the stale 1.
+    assert.equal(del!.body.requests[0].deleteDimension.range.startIndex, 2);
+  } finally {
+    restore();
+  }
+});
